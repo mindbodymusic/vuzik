@@ -1,32 +1,25 @@
 #pragma once
 
-#include "ofMain.h"
-#include "ofxiPhone.h"
-#include "ofxiPhoneExtras.h"
+#include <list>
+#include <vector>
 
-#include "ofxXmlSettings.h"
+#include "ofMain.h"
 #include "ofxOsc.h"
 
-#include "ofFretboard.h"
-#include "ofVoiceSynth.h"
-#include "ofColorMap.h"
+#include "cOoAudioTimer.h"
+#include "cOoFunctionTimeline.h"
+#include "cOoSketchedCurve.h"
+#include "cOoScreenMapper.h"
+#include "cOoVuzikXML.h"
+#include "cOoColorMap.h"
 
-enum {
+using namespace cOo;
+
+const int WHOLETONE = 5; const int CHROMATIC = 7;
+const int scaleTableSize = (int)VUZIK_PITCH_MAX;
+
+class testApp : public ofBaseApp {
     
-    BASS, TENOR,
-    ALTO, SOPRANO
-};
-
-const int nOfShift = 3;
-const int nOfThift = 20;
-
-const string oscTag = "/bpf";
-
-const int audioSampleRate = 44100;
-const int tickBufferSize = 512;
-
-class testApp : public ofxiPhoneApp {
-
   public:
     
     void setup( void );
@@ -34,56 +27,56 @@ class testApp : public ofxiPhoneApp {
     
     void update( void );
     void draw( void );
-	
-    void touchDown( ofTouchEventArgs &touch );
-    void touchMoved( ofTouchEventArgs &touch );
-    void touchUp( ofTouchEventArgs &touch );
     
-    void touchDoubleTap( ofTouchEventArgs & touch );
-    void touchCancelled( ofTouchEventArgs & touch );
+    void movePlaybackTime( Time time );
+    void zoomTimeline( double factor );
+    void moveTimeline( Time shift );
     
-    void audioOut( float *outBuf, int bufferSize, int nChan );
+    void startPlayback( void );
+    void pausePlayback( void );
+    void stopPlayback( void );
+    bool isPlaying( void );
 
-    void deviceOrientationChanged( int ori );
-    void gotMemoryWarning( void );
+    void keyPressed( int key );
+    void keyReleased( int key );
     
-    void lostFocus( void );
-    void gotFocus( void );
+    void mousePressed( int x, int y, int button );
+    void mouseReleased( int x, int y, int button );
+    void mouseDragged( int x, int y, int button );
+    void mouseMoved( int x, int y );
     
-    void setPod( int pidx );
+    void dragEvent( ofDragInfo dragInfo );
+    void windowResized( int w, int h );
+    void gotMessage( ofMessage msg );
+    
+    void loadScore(string fn, double timescale);
     
   protected:
+
+    static void playbackTimeInc( void *usrPtr ); // increment the pb head position
+    void sendTouchedAsOscMessages( void ); // send OSC messages for touched sets
+    void regenerateVisibleCurves( void ); // regenerate visible FBO curves
     
-    void sendOscMessage( void );
+    FunctionTimeline timeline; // timeline of breakpoint functions
+    vector<Record> tTouched, uTouched, dTouched, sTouched; // touched
+    
+    ScreenMapper screenMapper; // time/screen mapping object
+    list<SketchedCurve> sketchedCurve; // curve rendering obj
+    
+    AudioTimer timer; // audio-based timer with callback registration
+    ofMutex playbackAccess; // mutex for accessing the playback head
+    Time playbackTime; // playback head in seconds ( shared mem )
+    bool playAsLoop; // flag to set if we play as loop or not
+    
+    bool fullScreen; // flag to redraw all the curves
+    ColorMap colorMap; // load the color map
+    
+    ofxOscReceiver oscReceiver; // OSC receiver
+    ofxOscSender oscSender; // OSC sender
+    ofxOscMessage message; // message
+    
+    float scaleChromatic[scaleTableSize];
+    float scaleWholeTone[scaleTableSize];
     
     ofxXmlSettings XML;
-    
-    ofColorMap colorMap;
-    ofColor bgColor;
-    
-    ofFretboard fretboard;
-    float lowBound, highBound;
-    float touchX, touchY;
-    float noteShift;
-    
-    deque<float> shiftSmooth;
-    float oscPitch; float thPitch;
-    
-    deque<float> xTiltSmooth;
-    deque<float> yTiltSmooth;
-    float tiltX; float tiltY;
-    
-    ofxOscReceiver Receiver;
-    ofxOscMessage Message;
-    ofxOscSender Sender;
-    bool isSenderOn;
-    
-    vector<FormType> aVow;
-    vector<FormType> eVow;
-    float formShift;
-    
-    float sBuffer[tickBufferSize];
-    ofVoiceSynth voiceSynth;
-    
-    int podIndex;
 };

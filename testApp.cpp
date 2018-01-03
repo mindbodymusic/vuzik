@@ -1,0 +1,350 @@
+#include "testApp.h"
+
+void testApp::setup( void ) {
+    
+    list<SketchedCurve>::iterator skc;
+    list<BreakPointFunction *>::iterator bpf;
+    
+    ofSetFrameRate( 60 );
+    ofBackground( 10, 10, 10 );
+    
+    for( int k=0; k<scaleTableSize; k++ ) {
+    
+        scaleWholeTone[k] = 24.0f + (float)(2*k);
+        scaleChromatic[k] = 36.0f + (float)(k);
+    }
+    
+    XML.loadFile( "Configuration.xml" ); // get configuration
+    float stretch = XML.getValue( "CONFIG:STRETCH", 1.0f ); // piece stretch
+    float zoomFactor = XML.getValue( "CONFIG:ZOOM", 1.5f ); // zoom factor
+    string osc = XML.getValue( "CONFIG:OSC", "booh" ); // osc sender IP
+    
+    timer.setup( 128, 0.01, &playbackTimeInc, this ); // register the callback
+    oscSender.setup( osc, 7000 ); // send OSC on IP address and port 7000
+    
+    loadScore( "ConcordiaDiscors.xml", stretch ); // load piece
+    zoomTimeline( zoomFactor ); // apply the zoom factor
+    
+    movePlaybackTime( 0.0f );
+    screenMapper.setTimeOffset( 0.0f );
+    
+    fullScreen = false;
+    playAsLoop = false;
+}
+
+void testApp::loadScore( string fn, double timescale ) {
+    
+    stopPlayback();
+    timeline.clear();
+    
+    list<SketchedCurve>::iterator skc;
+    list<BreakPointFunction *>::iterator bpf;
+    
+    timeline.loadVuzikFile( fn, timescale ); // import the Vuzik files
+    sketchedCurve.resize( timeline.getSize() ); // resize the BPF-rendering
+    
+    for( bpf=timeline.getBegin(), skc=sketchedCurve.begin(); bpf!= timeline.getEnd();
+    bpf++, skc++ ) (*skc).link( (*bpf), &screenMapper ); // link each BPF to its FBO
+}
+
+void testApp::exit( void ) {
+    
+    // pause timer before quiting
+    if( isPlaying() ) { pausePlayback(); }
+}
+
+void testApp::update( void ) {
+    
+    ofxOscMessage m;
+    
+    while( oscReceiver.hasWaitingMessages() ) {
+        
+        oscReceiver.getNextMessage( &m );
+        
+        if( m.getAddress() == "/play" ) startPlayback(); // start/resume the playback
+        if( m.getAddress() == "/pause" ) pausePlayback(); // pause the playback at location
+        if( m.getAddress() == "/stop" ) stopPlayback(); // stop the playback and reset
+        
+        if( m.getAddress() == "/move" ) movePlaybackTime( (Time)m.getArgAsFloat( 0 ) );
+        if( m.getAddress() == "/zoom" ) zoomTimeline( (double)m.getArgAsFloat( 0 ) );
+        if( m.getAddress() == "/shift" ) moveTimeline( (Time)m.getArgAsFloat( 0 ) );
+    }
+}
+
+void testApp::draw( void ) {
+    
+    list<SketchedCurve>::iterator skc;
+    
+    glEnable( GL_LINE_SMOOTH ); glEnable( GL_BLEND );
+    glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+        
+    for( int k=0; k<((int)VUZIK_PITCH_MAX)+1; k++ ) {
+        
+        float semiLoc = ofMap( k, 0, VUZIK_PITCH_MAX, 0, ofGetHeight() );
+        ofSetColor( 255, 255, 255, 30 ); ofSetLineWidth( 2 );
+        ofLine( 0, semiLoc, ofGetWidth(), semiLoc );
+    }
+    
+    Time secVal = 0.0f;
+    float secLoc = 0.0f;
+    
+    while( secLoc < ofGetWidth() ) {
+    
+        secLoc = screenMapper.getXfromTime( secVal );
+        secVal = secVal + 1.0f; ofSetColor( 255, 255, 255, 20 );
+        ofSetLineWidth( 2 ); ofLine( secLoc, 0, secLoc, ofGetHeight() );
+    }
+    
+#ifndef WIN32
+    OSMemoryBarrier(); // memory-protected exchange of data
+#endif
+    dTouched = sTouched;
+    
+    playbackAccess.lock(); // playback time is locked
+    float tVal = screenMapper.getXfromTime( playbackTime );
+    playbackAccess.unlock(); // and used to update
+    
+    // we draw the line following the playback time
+    ofSetColor( 255, 255, 255, 100 ); ofSetLineWidth( 2 );
+    ofLine( tVal, 0, tVal, ofGetHeight() );
+    
+    for( skc=sketchedCurve.begin(); skc!=sketchedCurve.end();
+    skc++ ) (*skc).draw(); // we draw the FBO-based curves
+    
+    // draw circles for touched data sets
+    for( long k=0; k<dTouched.size(); k++ ) {
+        
+        if (dTouched[k].data.getVelocity() >0.105) {
+            
+            ofNoFill();
+            ofColor tColor;
+            
+            float yTouch = ofMap( dTouched[k].data.getPitch(),
+            VUZIK_PITCH_MIN, VUZIK_PITCH_MAX, ofGetHeight(), 0 );
+            float xTouch = screenMapper.getXfromTime( dTouched[k].data.time );
+            float tHue = colorMap.get( dTouched[k].type );
+            
+            if( tHue >= 0.0f ) tColor.setHsb( tHue, 140, 180 ); else tColor.setHsb( 0, 0, 180 );
+            ofSetColor( tColor, 200 ); ofCircle( xTouch, yTouch, 13 );
+            
+            if( tHue >= 0.0f ) tColor.setHsb( tHue, 220, 220 ); else tColor.setHsb( 0, 0, 220 );
+            ofSetColor( tColor, 200 ); ofCircle( xTouch, yTouch, 14 );
+            
+            if( tHue >= 0.0f ) tColor.setHsb( tHue, 180, 150 ); else tColor.setHsb( 0, 0, 150 );
+            ofSetColor( tColor, 200 ); ofCircle( xTouch, yTouch, 15 );
+        }
+    }
+    
+    playbackAccess.lock();
+    ofSetColor( 200, 200, 200 ); // draw playback time
+    ofDrawBitmapString( ofToString( playbackTime ), 20, 30 );
+    playbackAccess.unlock();
+    
+    // manage the shifting of the screen ~ playback
+    if( tVal > ofGetWidth()/2 && timeline.getMaxTime() >
+       screenMapper.getTimefromX( ofGetWidth() ) ) {
+        
+        playbackAccess.lock();
+        screenMapper.incTimeOffset( -( playbackTime-
+        screenMapper.getTimefromX( ofGetWidth()/2 ) ) );
+        playbackAccess.unlock();
+    }
+}
+
+void testApp::movePlaybackTime( Time time ) {
+    
+#ifdef OF_TARGET_OSX
+        OSMemoryBarrier(); // memory-protected exchange of data
+#endif
+    
+	uTouched = tTouched;
+    
+    timer.moveOffset( time ); // we move timer at new time
+    
+    playbackAccess.lock();
+    playbackTime = timer.getTime(); // we change playback position
+    playbackAccess.unlock();
+    
+    timeline.getTouched( uTouched, time ); // here we get the touched directly
+    sendTouchedAsOscMessages(); // then we send OSC messages to report that change
+    timeline.cleanEndTouched( uTouched ); // and we clean 'atEnd' ones right away
+    
+#ifdef OF_TARGET_OSX
+        OSMemoryBarrier(); // memory-protected exchange of data
+#endif
+    
+	tTouched = uTouched;    
+
+#ifndef WIN32
+        OSMemoryBarrier(); // memory-protected exchange of data
+#endif
+
+	sTouched = tTouched;
+}
+
+void testApp::zoomTimeline( double factor ) {
+    
+    if( factor < 0.000001f ) factor = 0.000001f;
+    
+    float pOffset = screenMapper.getXfromTime( playbackTime );
+    screenMapper.setPixelPerSec( factor * ( ofGetWidth() / 20.0f ) );
+    double newPbt = screenMapper.getTimefromX( pOffset );
+    screenMapper.incTimeOffset( newPbt-playbackTime );
+    
+    regenerateVisibleCurves();
+
+}
+
+void testApp::moveTimeline( Time shift ) {
+
+    screenMapper.incTimeOffset( shift );
+}
+
+void testApp::startPlayback( void ) {
+    
+    if( !timer.isRunning() ) { timer.start(); }
+}
+
+void testApp::pausePlayback( void ) {
+
+    if( timer.isRunning() ) { timer.stop(); }
+}
+
+void testApp::stopPlayback( void ) {
+
+    if( timer.isRunning() ) { timer.stop(); }
+    movePlaybackTime( 0.0f );
+}
+
+bool testApp::isPlaying( void ) {
+
+    return( timer.isRunning() );
+}
+
+void testApp::keyPressed( int key ) {
+    
+    if( key == ' ' ) {
+        
+        if( !isPlaying() ) startPlayback();
+        else if( isPlaying() ) pausePlayback();
+    }
+    
+    if( key == 'f' ) {
+        
+        fullScreen = !fullScreen;
+        ofSetFullscreen( fullScreen );
+        
+        if( fullScreen ) ofHideCursor();
+        else ofShowCursor();
+    }
+    
+    if( key == '<' ) moveTimeline( -0.1f );
+    if( key == '>' ) moveTimeline( 0.1f );
+}
+
+void testApp::keyReleased( int key ){
+    
+	if( key == 'f' ) { ofSleepMillis( 5 ); regenerateVisibleCurves(); }
+}
+
+void testApp::mousePressed( int x, int y, int button ) {
+    
+    movePlaybackTime( screenMapper.getTimefromX( x ) );
+}
+
+void testApp::mouseReleased( int x, int y, int button ) {
+    
+    
+}
+
+void testApp::mouseDragged( int x, int y, int button ) {
+    
+    movePlaybackTime( screenMapper.getTimefromX( x ) );
+}
+
+void testApp::mouseMoved( int x, int y ) {
+    
+    
+}
+
+void testApp::windowResized( int w, int h ) {
+
+    
+}
+
+void testApp::dragEvent( ofDragInfo dragInfo ) { 
+
+    
+}
+
+void testApp::gotMessage( ofMessage msg ) {
+    
+    
+}
+
+void testApp::sendTouchedAsOscMessages( void ) {
+    
+    for( long k=0; k<tTouched.size(); k++ ) {
+        
+        message.clear();
+        message.setAddress( "/bpf" );
+        
+        message.addIntArg( tTouched[k].id );
+        message.addIntArg( tTouched[k].type );
+        
+        float scaledPitch = 0.0f; int pIdx = (int) tTouched[k].data.getPitch();
+        if( tTouched[k].data.getScale() == WHOLETONE ) scaledPitch = scaleWholeTone[pIdx];
+        if( tTouched[k].data.getScale() == CHROMATIC ) scaledPitch = scaleChromatic[pIdx];
+        
+        message.addFloatArg( scaledPitch );
+        message.addFloatArg( tTouched[k].data.getVelocity() );
+        
+        if( tTouched[k].craziness ) message.addIntArg( 1 );
+        else message.addIntArg( 0 ); // convert craziness
+        
+        message.addIntArg( tTouched[k].state );
+        
+        if (tTouched[k].data.getVelocity() > 0.1025)
+            oscSender.sendMessage( message );
+    }
+}
+
+void testApp::playbackTimeInc( void *usrPtr ) {
+    
+    testApp *app = (testApp *)usrPtr;
+    
+    app->playbackAccess.lock();
+    
+    if( app->playbackTime > app->timeline.getMaxTime() ) {
+        
+        app->playbackAccess.unlock();
+        
+        if( !app->playAsLoop ) { app->timer.stop(); }
+        
+        app->movePlaybackTime( 0.0f );
+        app->screenMapper.setTimeOffset( 0.0f );
+        
+    } else {
+    
+        app->playbackTime = app->timer.getTime();
+        app->timeline.getNextTouched( app->tTouched, app->playbackTime );
+        app->playbackAccess.unlock();
+        
+#ifdef OF_TARGET_OSX
+        OSMemoryBarrier(); // memory-protected exchange of data
+#endif
+        
+		app->sTouched = app->tTouched;
+        app->sendTouchedAsOscMessages();
+    }
+}
+
+void testApp::regenerateVisibleCurves( void ) {
+
+    list<SketchedCurve>::iterator skc;
+    
+    for( skc=sketchedCurve.begin(); skc!=sketchedCurve.end(); skc++ ) {
+        
+        if( (*skc).isVisible() ) (*skc).generate();
+    }
+}
